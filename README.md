@@ -32,6 +32,22 @@ AMPml是使用python编写的抗菌肽预测软件。
 ![paac.jpg](https://i.loli.net/2020/11/24/Gm2xbs1niZNa5j4.jpg)
 
 ### 指标
+RF+PAAC+去M训练:
+
+accuracy: 0.944375
+
+precision: 0.8883248730964467
+
+recall: 0.8860759493670886
+
+f1: 0.8871989860583016
+
+Out-of-bag accuracy: 0.9394149933995692
+
+Out-of-bag balanced accuracy: 0.92310748007037
+
+AUC Score:0.9844550659173277
+
 RF+PAAC+去M训练: 20000非抗菌肽序列（去M）准确率为 97.16%
 
 RF+PAAC+去M训练: 20000非抗菌肽序列（不去M）准确率为 96.865%
