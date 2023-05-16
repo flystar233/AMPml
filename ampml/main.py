@@ -39,7 +39,8 @@ layout = [
     [sg.Text('|'  * 200)],
     [sg.Radio('prediction',  "RADIO1", font=("Helvetica", 11), size=(15, 1))],
     [sg.Text('seed', justification='right',size=(15, 1)), sg.Spin(values=[i for i in range(1, 10000)], initial_value=2020, size=(8, 1)),\
-    sg.Text('representation', justification='right',size=(15, 1)),sg.Drop(values=('AAC','CTDD','PAAC'),size=(8, 1))],
+        sg.Text('representation', justification='right',size=(15, 1)),sg.Drop(values=('AAC','CTDD','PAAC'),size=(8, 1))],
+    [sg.Text('threshold', justification='right',size=(15, 1)),sg.InputText('')],
     [sg.Text('_'  * 85)],      
     [sg.Text('Choose files', size=(10, 1),background_color='#dadada',font=("Helvetica", 12))], 
     [sg.Text('model file', size=(15, 1), auto_size_text=False, justification='right'), 
@@ -81,6 +82,7 @@ while  True:
         else:
             new_value['seed']=values[11]
             new_value['representation']=values[12]
+            new_value['threshold']=values[13]
             new_value['model']=values['Browse2']
             new_value['seq_file']=values['Browse3']
             new_value['drop_feature']=values['Browse4']
