@@ -16,7 +16,7 @@ from sklearn import svm
 from sklearn.naive_bayes import MultinomialNB
 from sklearn import metrics
 #from sklearn.decomposition import PCA
-from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.metrics import precision_score, recall_score, f1_score,RocCurveDisplay,roc_curve
 class DottableDict(dict):
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
@@ -101,10 +101,10 @@ def train(args):
     if args.method=='SVM':
         clf = svm.SVC(C=1, kernel='rbf',probability=True)
         Xtrain,Xtest,Ytrain,Ytest = train_test_split(X,y,test_size=0.2,random_state=1024)
-        clf.fit(Xtrain, Ytrain)
+        clf.fit(Xtrain.values, Ytrain)
         pred_test_y = clf.predict(Xtest)
         CM=metrics.confusion_matrix(Ytest, pred_test_y)
-        ROC = metrics.plot_roc_curve(clf, Xtest, Ytest)
+        ROC = RocCurveDisplay.from_estimator(clf, Xtest, Ytest)
         plt.savefig('ROC_SVM.png')
         cv_scores = cross_val_score(clf,Xtest,Ytest,cv=10,scoring='accuracy')
         with open(f"model_SVM_score.txt",'w') as OUT:
@@ -124,12 +124,15 @@ def train(args):
                                 random_state=args.seed,
                                 n_jobs=4) # CTDD 111 PAAC 143
         Xtrain,Xtest,Ytrain,Ytest = train_test_split(X,y,test_size=0.1,random_state=1024)
-        clf.fit(Xtrain, Ytrain)
+        clf.fit(Xtrain.values, Ytrain)
         pred_train = np.argmax(clf.oob_decision_function_, axis=1).tolist()
         y_predprob = clf.predict_proba(Xtest)[:,1]
         pred_test_y = clf.predict(Xtest)
         CM=metrics.confusion_matrix(Ytest, pred_test_y)
-        ROC = metrics.plot_roc_curve(clf, Xtest, Ytest)
+        fpr, tpr, thresholds = roc_curve(Ytest, y_predprob)
+        optimal_idx = np.argmax(tpr - fpr)
+        optimal_threshold = thresholds[optimal_idx]
+        ROC = RocCurveDisplay.from_estimator(clf, Xtest, Ytest)
         plt.savefig('ROC_RF.png')
         with open(f"model_RF_score.txt",'w') as OUT:
             OUT.write(f'accuracy: {clf.score(Xtest, Ytest)}\n')
@@ -139,6 +142,7 @@ def train(args):
             OUT.write(f'Out-of-bag accuracy:{clf.oob_score_}\n')
             OUT.write(f'Out-of-bag balanced accuracy:{metrics.balanced_accuracy_score(Ytrain, pred_train)}\n')
             OUT.write(f'AUC Score:: {metrics.roc_auc_score(Ytest, y_predprob)}\n')
+            OUT.write(f'The optimal threshold for classification:: {optimal_threshold}\n')
 
         #param_test1 = {'max_depth':range(3,20,2), 'min_samples_split':range(10,111,10)}
         #gsearch1 = GridSearchCV(estimator = RandomForestClassifier(n_estimators=100,min_samples_leaf=5,oob_score=True,
@@ -155,11 +159,11 @@ def train(args):
     elif args.method=='GT':
         clf = GradientBoostingClassifier(n_estimators=145, learning_rate=0.1,min_samples_split=78,max_depth=10,subsample=0.8,random_state=args.seed)
         Xtrain,Xtest,Ytrain,Ytest = train_test_split(X,y,test_size=0.1,random_state=1024)
-        clf.fit(Xtrain, Ytrain)
+        clf.fit(Xtrain.values, Ytrain)
         pred_test_y = clf.predict(Xtest)
         cv_scores = cross_val_score(clf,Xtest,Ytest,cv=10,scoring='accuracy')
         CM=metrics.confusion_matrix(Ytest, pred_test_y)
-        ROC = metrics.plot_roc_curve(clf, Xtest, Ytest)
+        ROC = RocCurveDisplay.from_estimator(clf, Xtest, Ytest)
         plt.savefig('ROC_GT.png')
         with open(f"model_GT_score.txt",'w') as OUT:
             OUT.write(f'accuracy: {clf.score(Xtest, Ytest)}\n')
@@ -178,11 +182,11 @@ def train(args):
     elif args.method=='bayes':
         clf = MultinomialNB()
         Xtrain,Xtest,Ytrain,Ytest = train_test_split(X,y,test_size=0.2,random_state=1024)
-        clf.fit(Xtrain, Ytrain)
+        clf.fit(Xtrain.values, Ytrain)
         pred_test_y = clf.predict(Xtest)
         CM=metrics.confusion_matrix(Ytest, pred_test_y)
         cv_scores = cross_val_score(clf,Xtest,Ytest,cv=10,scoring='accuracy')
-        ROC = metrics.plot_roc_curve(clf, Xtest, Ytest)
+        ROC = RocCurveDisplay.from_estimator(clf, Xtest, Ytest)
         plt.savefig('ROC_bayes.png')
         with open(f"model_bayes_score.txt",'w') as OUT:
             OUT.write(f'accuracy: {clf.score(Xtest, Ytest)}\n')
@@ -244,11 +248,20 @@ def predict(args):
     preds = clf.predict_proba(classify_df)
     for i, pred in enumerate(preds):
         pred_list = pred.tolist()
-        if clf.predict(classify_df.loc[id_info[i], :].to_numpy().reshape(1, -1))[0] == 1:
-            predicted = "AMP"
+        if args.threshold:
+            if pred[1] > float(args.threshold):
+                predicted = "AMP"
+            else:
+                predicted = "nonAMP"
+            output_line = "{}\t{}\t{}".format("\t".join([str(y) for y in pred_list]),
+                                          predicted,
+                                          id_info[i])
         else:
-            predicted = "nonAMP"
-        output_line = "{}\t{}\t{}".format("\t".join([str(y) for y in pred_list]),
+            if clf.predict(classify_df.loc[id_info[i], :].to_numpy().reshape(1, -1))[0] == 1:
+                predicted = "AMP"
+            else:
+                predicted = "nonAMP"
+            output_line = "{}\t{}\t{}".format("\t".join([str(y) for y in pred_list]),
                                           predicted,
                                           id_info[i])
         print(output_line, file=classify_output)
