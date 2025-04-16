@@ -18,37 +18,41 @@ column1 = [[sg.Text('Column 1', background_color='#F7F3EC', justification='cente
             [sg.Spin(values=('Spin Box 1', '2', '3'), initial_value='Spin Box 2')],      
             [sg.Spin(values=('Spin Box 1', '2', '3'), initial_value='Spin Box 3')]]      
 
-layout = [
-    [sg.Text('AMP prediction by ML', size=(30, 1), justification='center', font=("Consolas", 25), relief=sg.RELIEF_RIDGE)],
+train_layout = [
     [sg.Radio('train',  "RADIO1", font=("Helvetica", 11),size=(12, 1))],
     [sg.Checkbox('test trees', size=(10,1)),  sg.Checkbox('feature importance')],
-    [sg.Text('ML methods' , justification='right',size=(15, 1)),      
-               sg.Drop(values=('RF', 'bayes','SVM','GT'), auto_size_text=False)],
-    [sg.Text('seed',  justification='right',size=(15, 1)), sg.Spin(values=[i for i in range(1, 10000)], initial_value=2020, size=(8, 1))],
-    [sg.Text('representation', justification='right',size=(15, 1)),sg.Drop(values=('AAC','CTDD','PAAC'), auto_size_text=False)],
+    [sg.Text('ML methods',size=(15,1)), sg.Drop(values=('RF', 'bayes','SVM','GT'))],
+    [sg.Text('seed',size=(15,1)), sg.Spin(values=[i for i in range(1, 10000)], initial_value=2020)],
+    [sg.Text('representation',size=(15,1)),sg.Drop(values=('AAC','CTDD','PAAC'))],
+    [sg.Text('num-trees',size=(15,1)), sg.Spin(values=[i for i in range(1, 500)], initial_value=100)],
+    [sg.Text('_'*40)],
+    [sg.Text('Choose files',font=("Helvetica", 12))],
+    [sg.Text('positive file',size=(12, 1)), sg.Input(), sg.FileBrowse()],
+    [sg.Text('negative file',size=(12, 1)), sg.Input(), sg.FileBrowse()],
+    [sg.Text('drop features file',size=(12, 1)), sg.Input(), sg.FileBrowse()],
+    [sg.Text('Train result',font=("Helvetica", 12))],  
+    [sg.Multiline('', key='result',size=(60,5))]
+]
 
-    [sg.Text('num-trees', justification='right',size=(15, 1)), sg.Spin(values=[i for i in range(1, 500)], initial_value=100, size=(8, 1))],
-    [sg.Text('_'  * 85)],      
-    [sg.Text('Choose files', size=(10, 1),background_color='#dadada',font=("Helvetica", 12))],      
-    [sg.Text('positive file', size=(15, 1), auto_size_text=False, justification='right'), 
-        sg.InputText(''), sg.FileBrowse()],
-    [sg.Text('negative file', size=(15, 1), auto_size_text=False, justification='right'), sg.InputText(''), sg.FileBrowse()],
-    [sg.Text('drop features file', size=(15, 1), auto_size_text=False, justification='right'), sg.InputText(''), sg.FileBrowse()],
-    [sg.Text('Train result',background_color='#dadada',font=("Helvetica", 12))],  
-    [sg.Text('', key='result',justification='center',background_color='#dadada',size=(75,5))],
-    [sg.Text('|'  * 200)],
-    [sg.Radio('prediction',  "RADIO1", font=("Helvetica", 11), size=(15, 1))],
-    [sg.Text('seed', justification='right',size=(15, 1)), sg.Spin(values=[i for i in range(1, 10000)], initial_value=2020, size=(8, 1)),\
-        sg.Text('representation', justification='right',size=(15, 1)),sg.Drop(values=('AAC','CTDD','PAAC'),size=(8, 1))],
-    [sg.Text('threshold', justification='right',size=(15, 1)),sg.InputText('')],
-    [sg.Text('_'  * 85)],      
-    [sg.Text('Choose files', size=(10, 1),background_color='#dadada',font=("Helvetica", 12))], 
-    [sg.Text('model file', size=(15, 1), auto_size_text=False, justification='right'), 
-        sg.InputText(''), sg.FileBrowse()],
-    [sg.Text('input sequences', size=(15, 1), auto_size_text=False, justification='right'), 
-        sg.InputText(''), sg.FileBrowse()],
-    [sg.Text('drop features file', size=(15, 1), auto_size_text=False, justification='right'), sg.InputText(''), sg.FileBrowse()],
-    [sg.Button('Calculate', key='Calculate'),sg.Quit('Cancel', key='Cancel')]
+predict_layout = [
+    [sg.Radio('prediction',  "RADIO1", font=("Helvetica", 11))],
+    [sg.Text('seed',size=(12,1)), sg.Spin(values=[i for i in range(1, 10000)], initial_value=2020)],
+    [sg.Text('representation',size=(12,1)),sg.Drop(values=('AAC','CTDD','PAAC'))],
+    [sg.Text('threshold',size=(12,1)),sg.InputText('')],
+    [sg.Text('_'*40)],
+    [sg.Text('Choose files',font=("Helvetica", 12))], 
+    [sg.Text('model file',size=(12,1)), sg.Input(), sg.FileBrowse()],
+    [sg.Text('input sequences',size=(12,1)), sg.Input(), sg.FileBrowse()],
+    [sg.Text('drop features file',size=(12,1)), sg.Input(), sg.FileBrowse()]
+]
+
+# 将标题放在一个 sg.Column 中，并设置水平居中对齐
+title_column = [[sg.Text('AMP prediction by ML', justification='center', font=("Consolas", 15), relief=sg.RELIEF_RIDGE)]]
+
+layout = [
+    [sg.Column(title_column, justification='center')],  # 使用 sg.Column 并设置对齐方式
+    [sg.TabGroup([[sg.Tab('Train', train_layout), sg.Tab('Predict', predict_layout)]])],
+    [sg.Button('Calculate'),sg.Button('Cancel')]
 ]
 
 window = sg.Window('AMPml', layout, default_element_size=(40, 1), grab_anywhere=False)
