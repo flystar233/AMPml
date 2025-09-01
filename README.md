@@ -5,7 +5,7 @@ AMPml is a software for antimicrobial peptide (AMP) predicting written in python
 AMPml operates in the Python environment, and run on the Windows system.
 
 Step 1. Enter the command in CMD to open the visual interface:
-python main.py
+python run_gui.py
 
 Step 2. Choose prediction model (PAAC or CTDD).
 
