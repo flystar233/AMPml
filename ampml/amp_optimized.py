@@ -9,7 +9,9 @@ import math
 import os
 import re
 import pickle
+import joblib
 import logging
+from datetime import datetime
 from typing import Dict, Any, Union, Tuple, Optional
 from collections import Counter
 
@@ -18,6 +20,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # 使用非GUI后端避免Tkinter错误
 import matplotlib.pyplot as plt
+import sklearn
 import sklearn.utils
 from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
@@ -30,6 +33,19 @@ from sklearn.metrics import precision_score, recall_score, f1_score, RocCurveDis
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# 初始化XGBoost可用性变量
+XGBOOST_AVAILABLE = False
+
+# 导入XGBoost
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+    logger.info("XGBoost 已成功导入")
+except ImportError as e:
+    XGBOOST_AVAILABLE = False
+    logger.warning(f"XGBoost 不可用: {e}")
+    logger.warning("如需使用XGBoost，请运行: pip install xgboost")
 
 # 配置常量
 DEFAULT_RANDOM_STATE = 2020
@@ -464,6 +480,27 @@ class ModelTrainer:
                 subsample=0.8,
                 random_state=random_state
             )
+        elif method == 'XGB':
+            if not XGBOOST_AVAILABLE:
+                raise ValueError("XGBoost 不可用。请运行: pip install xgboost")
+            
+            # 计算正负样本比例来平衡数据
+            pos_count = np.sum(y == 1)
+            neg_count = np.sum(y == 0)
+            scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
+            
+            model = xgb.XGBClassifier(
+                n_estimators=num_trees,
+                max_depth=6,
+                learning_rate=0.1,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                scale_pos_weight=scale_pos_weight,  # 平衡正负样本权重
+                random_state=random_state,
+                objective='binary:logistic',
+                eval_metric='logloss',
+                n_jobs=4
+            )
         elif method == 'bayes':
             model = MultinomialNB()
         else:
@@ -535,7 +572,7 @@ class ModelTrainer:
                     if optimal_threshold is not None:
                         f.write(f'建议阈值: {optimal_threshold:.4f}\n')
             
-            elif method in ['SVM', 'GT', 'bayes']:
+            elif method in ['SVM', 'GT', 'XGB', 'bayes']:
                 cv_scores = cross_val_score(model, X_test, y_test, cv=10, scoring='accuracy')
                 f.write(f'10折交叉验证准确率: {np.mean(cv_scores):.4f}\n')
                 
@@ -667,7 +704,7 @@ def train(args) -> Union[Tuple[float, np.ndarray], Tuple[float, float, float, np
             oob_acc, oob_balanced_acc, auc_score, confusion_mat, roc_data = result
             result = (oob_acc, oob_balanced_acc, auc_score, confusion_mat)  # 保持原有格式
         else:
-            # 其他方法返回: (cv_score, confusion_mat, roc_data)
+            # 其他方法 (SVM, GT, XGB, bayes) 返回: (cv_score, confusion_mat, roc_data)
             cv_score, confusion_mat, roc_data = result
             result = (cv_score, confusion_mat)  # 保持原有格式
         
@@ -687,16 +724,45 @@ def train(args) -> Union[Tuple[float, np.ndarray], Tuple[float, float, float, np
                     n_estimators=145, learning_rate=0.1, min_samples_split=78,
                     max_depth=10, subsample=0.8, random_state=getattr(args, 'seed', DEFAULT_RANDOM_STATE)
                 )
+            elif args.method == 'XGB':
+                if not XGBOOST_AVAILABLE:
+                    raise ValueError("XGBoost 不可用。请运行: pip install xgboost")
+                
+                # 计算正负样本比例来平衡数据
+                pos_count = np.sum(y == 1)
+                neg_count = np.sum(y == 0)
+                scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
+                
+                model = xgb.XGBClassifier(
+                    n_estimators=getattr(args, 'num_trees', 100),
+                    max_depth=6, learning_rate=0.1, subsample=0.8, colsample_bytree=0.8,
+                    scale_pos_weight=scale_pos_weight,  # 平衡正负样本权重
+                    random_state=getattr(args, 'seed', DEFAULT_RANDOM_STATE),
+                    objective='binary:logistic', eval_metric='logloss', n_jobs=4
+                )
             elif args.method == 'bayes':
                 model = MultinomialNB()
             
             model.fit(X.values, y)
             
-            model_file = f"AMPpred_{args.representation}.model"
+            # 使用joblib保存模型 - 包含元数据和压缩
+            model_info = {
+                'model': model,
+                'feature_names': X.columns.tolist(),
+                'representation': args.representation,
+                'method': args.method,
+                'n_features': len(X.columns),
+                'n_samples': len(X),
+                'sklearn_version': sklearn.__version__,
+                'timestamp': datetime.now().isoformat(),
+                'random_state': DEFAULT_RANDOM_STATE
+            }
+            
+            model_file = f"AMPpred_{args.representation}.joblib"
             model_path = os.path.join(result_dir, model_file)
-            with open(model_path, "wb") as f:
-                pickle.dump(model, f)
-            logger.info(f"模型已保存到: {model_path}")
+            joblib.dump(model_info, model_path, compress=3)
+            logger.info(f"模型已保存到: {model_path} (使用joblib压缩)")
+            logger.info(f"特征数量: {len(X.columns)}, 样本数量: {len(X)}")
             
         except Exception as e:
             logger.error(f"模型保存失败: {e}")
@@ -719,13 +785,23 @@ def train(args) -> Union[Tuple[float, np.ndarray], Tuple[float, float, float, np
 def predict(args) -> None:
     """预测序列 - GUI兼容接口"""
     try:
-        # 加载模型
+        # 加载模型 - 支持joblib和pickle格式
         if not os.path.exists(args.model):
             raise FileNotFoundError(f"模型文件不存在: {args.model}")
         
-        with open(args.model, "rb") as f:
-            model = pickle.load(f)
-        logger.info(f"模型已加载: {args.model}")
+        if args.model.endswith('.joblib'):
+            # 新格式：使用joblib加载带元数据的模型
+            model_info = joblib.load(args.model)
+            model = model_info['model']
+            logger.info(f"模型已加载: {args.model} (joblib格式)")
+            logger.info(f"特征数量: {model_info.get('n_features', 'N/A')}")
+            logger.info(f"训练方法: {model_info.get('method', 'N/A')}")
+            logger.info(f"sklearn版本: {model_info.get('sklearn_version', 'N/A')}")
+        else:
+            # 旧格式：向后兼容pickle文件
+            with open(args.model, "rb") as f:
+                model = pickle.load(f)
+            logger.info(f"模型已加载: {args.model} (pickle格式，建议转换为joblib)")
         
         # 提取特征
         if args.representation == 'AAC':
@@ -800,4 +876,5 @@ if __name__ == "__main__":
     # 测试代码
     print("AMPml 核心模块加载成功")
     print(f"支持的特征方法: AAC, CTDD, PAAC")
-    print(f"支持的机器学习方法: RF, SVM, GT, bayes")
+    print(f"支持的机器学习方法: RF, SVM, GT, XGB, bayes")
+    print(f"XGBoost 可用性: {XGBOOST_AVAILABLE}")
