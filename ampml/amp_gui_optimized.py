@@ -53,6 +53,8 @@ class UIState:
         self.uploaded_files = {}
         # 消息队列用于异步任务与UI通信
         self.message_queue = []
+        # UI更新队列用于异步任务向主线程传递UI更新命令
+        self.ui_update_queue = []
     
     def reset_training_state(self):
         """重置训练状态"""
@@ -72,6 +74,20 @@ class UIState:
         messages = self.message_queue.copy()
         self.message_queue.clear()
         return messages
+    
+    def add_ui_update(self, component_name: str, action: str, value: Any = None):
+        """添加UI更新命令到队列"""
+        self.ui_update_queue.append({
+            'component': component_name,
+            'action': action,
+            'value': value
+        })
+    
+    def get_ui_updates(self):
+        """获取并清空UI更新队列"""
+        updates = self.ui_update_queue.copy()
+        self.ui_update_queue.clear()
+        return updates
 
 
 class FileManager:
@@ -348,6 +364,7 @@ class AMPmlAppOptimized:
                             'RF': '🌲 随机森林 (推荐)',
                             'SVM': '🎯 支持向量机',
                             'GT': '🚀 梯度提升',
+                            'XGB': '⚡ XGBoost (极速梯度提升)',
                             'bayes': '📊 朴素贝叶斯'
                         },
                         value='RF',
@@ -481,7 +498,7 @@ class AMPmlAppOptimized:
                 # 模型文件
                 with ui.column().classes('upload-area'):
                     ui.label('训练模型文件').classes('font-medium text-gray-700 mb-3')
-                    ui.label('.model格式文件').classes('text-xs text-gray-500 mb-2')
+                    ui.label('.joblib格式文件 (推荐) 或 .model格式文件').classes('text-xs text-gray-500 mb-2')
                     
                     self.ui_components['model_upload'] = ui.upload(
                         on_upload=lambda e: self._handle_file_upload(e, 'model'),
@@ -589,23 +606,69 @@ class AMPmlAppOptimized:
     def _setup_message_timer(self):
         """设置消息处理定时器"""
         def process_messages():
-            """处理消息队列中的消息（只记录到日志，不显示弹窗）"""
+            """处理消息队列中的消息，显示通知并记录到日志"""
             messages = self.ui_state.get_messages()
             for msg in messages:
                 try:
                     if msg['type'] == 'positive':
+                        ui.notify(msg['text'], color='positive', position='top')
                         logger.info(f"成功: {msg['text']}")
                     elif msg['type'] == 'negative':
+                        ui.notify(msg['text'], color='negative', position='top')
                         logger.error(f"错误: {msg['text']}")
                     elif msg['type'] == 'warning':
+                        ui.notify(msg['text'], color='warning', position='top')
                         logger.warning(f"警告: {msg['text']}")
                     else:
+                        ui.notify(msg['text'], color='info', position='top')
                         logger.info(f"信息: {msg['text']}")
                 except Exception as e:
                     logger.error(f"消息处理失败: {e}")
+            
+            # 处理UI更新队列
+            ui_updates = self.ui_state.get_ui_updates()
+            for update in ui_updates:
+                try:
+                    self._process_ui_update(update)
+                except Exception as e:
+                    logger.error(f"UI更新处理失败: {e}")
         
-        # 每0.5秒检查一次消息队列
+        # 每0.5秒检查一次消息队列和UI更新队列
         ui.timer(0.5, process_messages)
+    
+    def _process_ui_update(self, update: Dict[str, Any]):
+        """处理UI更新命令"""
+        component_name = update['component']
+        action = update['action']
+        value = update['value']
+        
+        if component_name not in self.ui_components:
+            logger.warning(f"未找到UI组件: {component_name}")
+            return
+        
+        component = self.ui_components[component_name]
+        
+        try:
+            if action == 'set_content':
+                component.content = value
+            elif action == 'set_text':
+                component.text = value
+            elif action == 'set_visibility':
+                component.set_visibility(value)
+            elif action == 'set_props':
+                component.props(value)
+            elif action == 'enable':
+                component.enable()
+            elif action == 'disable':
+                component.disable()
+            elif action == 'set_source':
+                component.set_source(value)
+            elif action == 'set_classes':
+                component.classes(value)
+            else:
+                logger.warning(f"未知的UI更新动作: {action}")
+        except Exception as e:
+            logger.error(f"UI更新执行失败: {e}")
     
     def _create_about_panel(self):
         """创建关于面板"""
@@ -659,6 +722,7 @@ class AMPmlAppOptimized:
                         - `RF`：随机森林（推荐）
                         - `SVM`：支持向量机
                         - `GT`：梯度提升
+                        - `XGB`：XGBoost极速梯度提升
                         - `Bayes`：朴素贝叶斯
                         ''')
                     
@@ -692,7 +756,7 @@ class AMPmlAppOptimized:
                         - 包含待预测序列的FASTA文件
                         
                         **第2步**：选择模型
-                        - 选择训练好的模型文件（.model格式）
+                        - 选择训练好的模型文件（.joblib格式推荐，.model格式兼容）
                         
                         **第3步**：开始预测
                         - 点击"开始预测"按钮
@@ -712,7 +776,7 @@ class AMPmlAppOptimized:
                         ui.label('📁 结果文件说明').classes('font-medium text-gray-700')
                         ui.markdown('''
                         **训练结果文件**：
-                        - `AMPpred_[方法].model`：训练好的模型
+                        - `AMPpred_[方法].joblib`：训练好的模型
                         - `model_[算法]_score.txt`：评估指标
                         - `ROC_[算法].png`：ROC曲线图
                         - `feature_importances.txt`：特征重要性
@@ -756,6 +820,13 @@ class AMPmlAppOptimized:
                     self.ui_components[error_status_key].classes('text-sm status-error')
                     return
             
+            # 验证模型文件格式
+            elif file_type == 'model':
+                if not (event.name.endswith('.joblib') or event.name.endswith('.model')):
+                    self.ui_components['model_status'].text = f'❌ {event.name} (请选择.joblib或.model格式)'
+                    self.ui_components['model_status'].classes('text-sm status-error')
+                    return
+            
             # 更新状态
             self.ui_state.uploaded_files[file_type] = file_path
             status_key = f'{file_type}_status'
@@ -783,40 +854,93 @@ class AMPmlAppOptimized:
     
     def _start_training_async(self):
         """异步启动训练"""
-        asyncio.create_task(self._start_training())
+        # 防止重复点击
+        if self.ui_state.is_training:
+            ui.notify('训练正在进行中，请耐心等待...', color='warning')
+            return
+        
+        # 在主线程中读取UI组件值，避免在异步任务中读取
+        try:
+            training_params = {
+                'method': self.ui_components['ml_method'].value,
+                'representation': self.ui_components['representation'].value,
+                'seed': int(self.ui_components['seed'].value),
+                'num_trees': int(self.ui_components['num_trees'].value),
+                'tree_test': self.ui_components['tree_test'].value,
+                'feature_importance': self.ui_components['feature_importance'].value
+            }
+            asyncio.create_task(self._start_training(training_params))
+        except Exception as e:
+            ui.notify(f'参数读取失败: {str(e)}', color='negative')
+            logger.error(f"参数读取失败: {e}")
     
-    async def _start_training(self):
+    async def _start_training(self, training_params: dict):
         """开始训练模型"""
         try:
             # 验证必要文件
             if 'positive' not in self.ui_state.uploaded_files or 'negative' not in self.ui_state.uploaded_files:
-                ui.notify('请先上传正样本和负样本文件！', color='negative')
+                error_msg = '❌ 请先上传正样本和负样本文件！'
+                # 通过队列更新UI，避免在异步任务中直接操作
+                self.ui_state.add_ui_update('training_result', 'set_content', error_msg)
+                self.ui_state.add_ui_update('result_container', 'set_visibility', True)
+                self.ui_state.add_message(error_msg, 'negative')
+                return
+            
+            # 验证文件是否存在
+            positive_file = self.ui_state.uploaded_files['positive']
+            negative_file = self.ui_state.uploaded_files['negative']
+            
+            if not os.path.exists(positive_file):
+                error_msg = f'❌ 正样本文件不存在: {positive_file}'
+                self.ui_state.add_ui_update('training_result', 'set_content', error_msg)
+                self.ui_state.add_ui_update('result_container', 'set_visibility', True)
+                self.ui_state.add_message(error_msg, 'negative')
+                return
+                
+            if not os.path.exists(negative_file):
+                error_msg = f'❌ 负样本文件不存在: {negative_file}'
+                self.ui_state.add_ui_update('training_result', 'set_content', error_msg)
+                self.ui_state.add_ui_update('result_container', 'set_visibility', True)
+                self.ui_state.add_message(error_msg, 'negative')
                 return
             
             # 设置训练状态
             self.ui_state.reset_training_state()
             self.ui_state.is_training = True
             
-            # 更新UI状态
-            self._update_training_ui_start()
+            # 更新UI状态 - 通过队列避免直接操作
+            self.ui_state.add_ui_update('train_button', 'set_text', '训练中...')
+            self.ui_state.add_ui_update('train_button', 'set_props', 'color=secondary')
+            self.ui_state.add_ui_update('train_button', 'disable', None)
+            self.ui_state.add_ui_update('stop_button', 'set_visibility', True)
+            self.ui_state.add_ui_update('training_spinner', 'set_visibility', True)
+            self.ui_state.add_ui_update('result_container', 'set_visibility', True)
+            self.ui_state.add_ui_update('roc_image', 'set_visibility', False)
+            self.ui_state.add_ui_update('roc_placeholder', 'set_visibility', True)
             
-            # 准备训练参数
+            # 准备训练参数，使用传入的参数而不是读取UI组件
             args = DottableDict({
-                'method': self.ui_components['ml_method'].value,
-                'representation': self.ui_components['representation'].value,
-                'seed': int(self.ui_components['seed'].value),
-                'num_trees': int(self.ui_components['num_trees'].value),
-                'tree_test': self.ui_components['tree_test'].value,
-                'feature_importance': self.ui_components['feature_importance'].value,
+                'method': training_params['method'],
+                'representation': training_params['representation'],
+                'seed': training_params['seed'],
+                'num_trees': training_params['num_trees'],
+                'tree_test': training_params['tree_test'],
+                'feature_importance': training_params['feature_importance'],
                 'positive': self.ui_state.uploaded_files['positive'],
                 'negative': self.ui_state.uploaded_files['negative'],
                 'drop_feature': self.ui_state.uploaded_files.get('drop_feature')
             })
             
-            # 执行训练
-            self.ui_components['training_result'].content = '🔄 正在训练模型，请稍候...'
+            # 执行训练 - 使用队列更新UI而不是直接操作
+            self.ui_state.add_ui_update('training_result', 'set_content', '🔄 正在训练模型，请稍候...')
             
-            result = await asyncio.get_event_loop().run_in_executor(None, train, args)
+            # 使用try-except包装后台任务执行
+            try:
+                result = await asyncio.get_event_loop().run_in_executor(None, train, args)
+            except Exception as train_error:
+                # 如果train函数内部出错，捕获并处理
+                logger.error(f"训练函数执行失败: {train_error}")
+                raise train_error
             
             # 检查是否被取消
             if self.ui_state.training_cancelled:
@@ -833,38 +957,26 @@ class AMPmlAppOptimized:
         finally:
             self.ui_state.reset_training_state()
     
-    def _update_training_ui_start(self):
-        """更新训练开始时的UI状态"""
-        self.ui_components['train_button'].text = '训练中...'
-        self.ui_components['train_button'].props('color=secondary')
-        self.ui_components['train_button'].disable()
-        self.ui_components['stop_button'].set_visibility(True)
-        self.ui_components['training_spinner'].set_visibility(True)
-        
-        # 显示结果区域
-        self.ui_components['result_container'].set_visibility(True)
-        self.ui_components['roc_image'].set_visibility(False)
-        self.ui_components['roc_placeholder'].set_visibility(True)
     
     def _update_training_ui_cancelled(self):
         """更新训练取消时的UI状态"""
-        self.ui_components['training_result'].content = '❌ 训练已被用户取消'
+        self.ui_state.add_ui_update('training_result', 'set_content', '❌ 训练已被用户取消')
         self.ui_state.add_message('训练已取消', 'warning')
-        self._reset_training_ui()
+        self._reset_training_ui_via_queue()
     
     def _update_training_ui_error(self, error_msg: str):
         """更新训练错误时的UI状态"""
-        self.ui_components['training_result'].content = f'❌ 训练失败: {error_msg}'
+        self.ui_state.add_ui_update('training_result', 'set_content', f'❌ 训练失败: {error_msg}')
         self.ui_state.add_message(f'训练失败: {error_msg}', 'negative')
-        self._reset_training_ui()
+        self._reset_training_ui_via_queue()
     
-    def _reset_training_ui(self):
-        """重置训练UI状态"""
-        self.ui_components['train_button'].text = '开始训练'
-        self.ui_components['train_button'].props('color=primary')
-        self.ui_components['train_button'].enable()
-        self.ui_components['stop_button'].set_visibility(False)
-        self.ui_components['training_spinner'].set_visibility(False)
+    def _reset_training_ui_via_queue(self):
+        """通过队列重置训练UI状态"""
+        self.ui_state.add_ui_update('train_button', 'set_text', '开始训练')
+        self.ui_state.add_ui_update('train_button', 'set_props', 'color=primary')
+        self.ui_state.add_ui_update('train_button', 'enable', None)
+        self.ui_state.add_ui_update('stop_button', 'set_visibility', False)
+        self.ui_state.add_ui_update('training_spinner', 'set_visibility', False)
     
     async def _process_training_result(self, args, result):
         """处理训练结果"""
@@ -887,7 +999,7 @@ class AMPmlAppOptimized:
             # 检查生成的文件（在result目录中）
             generated_files = []
             result_dir = "result"
-            model_file = f"AMPpred_{args.representation}.model"
+            model_file = f"AMPpred_{args.representation}.joblib"
             score_file = f"model_{args.method}_score.txt"
             feature_importance_file = "feature_importances.txt"
             
@@ -930,7 +1042,8 @@ class AMPmlAppOptimized:
 
 {files_info}'''
             
-            self.ui_components['training_result'].content = result_text
+            # 使用队列更新UI
+            self.ui_state.add_ui_update('training_result', 'set_content', result_text)
             
             # 显示ROC曲线
             await self._display_roc_curve(args.method, roc_data)
@@ -940,15 +1053,15 @@ class AMPmlAppOptimized:
                 await self._display_feature_importance(feature_importance_data)
             else:
                 # 隐藏特征重要性图
-                self.ui_components['feature_importance_image'].set_visibility(False)
-                self.ui_components['feature_importance_placeholder'].set_visibility(True)
+                self.ui_state.add_ui_update('feature_importance_image', 'set_visibility', False)
+                self.ui_state.add_ui_update('feature_importance_placeholder', 'set_visibility', True)
             
             # 更新UI状态
-            self.ui_components['train_button'].text = '重新训练'
-            self.ui_components['train_button'].props('color=primary')
-            self.ui_components['train_button'].enable()
-            self.ui_components['stop_button'].set_visibility(False)
-            self.ui_components['training_spinner'].set_visibility(False)
+            self.ui_state.add_ui_update('train_button', 'set_text', '重新训练')
+            self.ui_state.add_ui_update('train_button', 'set_props', 'color=primary')
+            self.ui_state.add_ui_update('train_button', 'enable', None)
+            self.ui_state.add_ui_update('stop_button', 'set_visibility', False)
+            self.ui_state.add_ui_update('training_spinner', 'set_visibility', False)
             
             file_count = len(generated_files)
             # 使用消息队列显示通知
@@ -963,9 +1076,9 @@ class AMPmlAppOptimized:
         try:
             if roc_data and roc_data.startswith('data:image/png;base64,'):
                 # 优先使用base64数据
-                self.ui_components['roc_image'].set_source(roc_data)
-                self.ui_components['roc_image'].set_visibility(True)
-                self.ui_components['roc_placeholder'].set_visibility(False)
+                self.ui_state.add_ui_update('roc_image', 'set_source', roc_data)
+                self.ui_state.add_ui_update('roc_image', 'set_visibility', True)
+                self.ui_state.add_ui_update('roc_placeholder', 'set_visibility', False)
                 logger.info("ROC曲线显示成功（base64数据）")
             else:
                 # 降级到文件读取
@@ -975,9 +1088,9 @@ class AMPmlAppOptimized:
                     with open(roc_file, 'rb') as f:
                         file_data = f.read()
                         roc_base64 = base64.b64encode(file_data).decode()
-                        self.ui_components['roc_image'].set_source(f'data:image/png;base64,{roc_base64}')
-                        self.ui_components['roc_image'].set_visibility(True)
-                        self.ui_components['roc_placeholder'].set_visibility(False)
+                        self.ui_state.add_ui_update('roc_image', 'set_source', f'data:image/png;base64,{roc_base64}')
+                        self.ui_state.add_ui_update('roc_image', 'set_visibility', True)
+                        self.ui_state.add_ui_update('roc_placeholder', 'set_visibility', False)
                     
                     # 删除临时文件
                     try:
@@ -987,73 +1100,111 @@ class AMPmlAppOptimized:
                     logger.info("ROC曲线显示成功（文件读取）")
                 else:
                     logger.warning(f"ROC数据和文件都不可用: {method}")
-                    self.ui_components['roc_image'].set_visibility(False)
-                    self.ui_components['roc_placeholder'].set_visibility(True)
+                    self.ui_state.add_ui_update('roc_image', 'set_visibility', False)
+                    self.ui_state.add_ui_update('roc_placeholder', 'set_visibility', True)
         except Exception as e:
             logger.error(f"ROC曲线显示失败: {e}")
-            self.ui_components['roc_image'].set_visibility(False)
-            self.ui_components['roc_placeholder'].set_visibility(True)
+            self.ui_state.add_ui_update('roc_image', 'set_visibility', False)
+            self.ui_state.add_ui_update('roc_placeholder', 'set_visibility', True)
     
     async def _display_feature_importance(self, feature_importance_data: str):
         """显示特征重要性图"""
         try:
             if feature_importance_data and feature_importance_data.startswith('data:image/png;base64,'):
-                self.ui_components['feature_importance_image'].set_source(feature_importance_data)
-                self.ui_components['feature_importance_image'].set_visibility(True)
-                self.ui_components['feature_importance_placeholder'].set_visibility(False)
+                self.ui_state.add_ui_update('feature_importance_image', 'set_source', feature_importance_data)
+                self.ui_state.add_ui_update('feature_importance_image', 'set_visibility', True)
+                self.ui_state.add_ui_update('feature_importance_placeholder', 'set_visibility', False)
                 logger.info("特征重要性图显示成功")
             else:
                 logger.warning("特征重要性数据无效")
-                self.ui_components['feature_importance_image'].set_visibility(False)
-                self.ui_components['feature_importance_placeholder'].set_visibility(True)
+                self.ui_state.add_ui_update('feature_importance_image', 'set_visibility', False)
+                self.ui_state.add_ui_update('feature_importance_placeholder', 'set_visibility', True)
         except Exception as e:
             logger.error(f"显示特征重要性图失败: {e}")
-            self.ui_components['feature_importance_image'].set_visibility(False)
-            self.ui_components['feature_importance_placeholder'].set_visibility(True)
+            self.ui_state.add_ui_update('feature_importance_image', 'set_visibility', False)
+            self.ui_state.add_ui_update('feature_importance_placeholder', 'set_visibility', True)
     
     def _start_prediction_async(self):
         """异步启动预测"""
-        asyncio.create_task(self._start_prediction())
+        # 防止重复点击
+        if self.ui_state.is_predicting:
+            ui.notify('预测正在进行中，请耐心等待...', color='warning')
+            return
+        
+        # 在主线程中读取UI组件值，避免在异步任务中读取
+        try:
+            prediction_params = {
+                'representation': self.ui_components['pred_representation'].value,
+                'seed': int(self.ui_components['pred_seed'].value),
+                'threshold': self.ui_components['threshold'].value if self.ui_components['threshold'].value else None
+            }
+            asyncio.create_task(self._start_prediction(prediction_params))
+        except Exception as e:
+            ui.notify(f'参数读取失败: {str(e)}', color='negative')
+            logger.error(f"预测参数读取失败: {e}")
     
-    async def _start_prediction(self):
+    async def _start_prediction(self, prediction_params: dict):
         """开始预测"""
         try:
             # 验证必要文件
             if 'model' not in self.ui_state.uploaded_files or 'sequence' not in self.ui_state.uploaded_files:
-                self.ui_state.add_message('请先上传模型文件和序列文件！', 'negative')
+                error_msg = '❌ 请先上传模型文件和序列文件！'
+                self.ui_state.add_ui_update('prediction_result', 'set_content', error_msg)
+                self.ui_state.add_message(error_msg, 'negative')
+                return
+            
+            # 验证文件是否存在
+            model_file = self.ui_state.uploaded_files['model']
+            sequence_file = self.ui_state.uploaded_files['sequence']
+            
+            if not os.path.exists(model_file):
+                error_msg = f'❌ 模型文件不存在: {model_file}'
+                self.ui_state.add_ui_update('prediction_result', 'set_content', error_msg)
+                self.ui_state.add_message(error_msg, 'negative')
+                return
+                
+            if not os.path.exists(sequence_file):
+                error_msg = f'❌ 序列文件不存在: {sequence_file}'
+                self.ui_state.add_ui_update('prediction_result', 'set_content', error_msg)
+                self.ui_state.add_message(error_msg, 'negative')
                 return
             
             # 设置预测状态
             self.ui_state.reset_prediction_state()
             self.ui_state.is_predicting = True
             
-            self.ui_components['prediction_spinner'].set_visibility(True)
-            self.ui_components['prediction_result'].content = '🔄 正在预测序列，请稍候...'
+            self.ui_state.add_ui_update('prediction_spinner', 'set_visibility', True)
+            self.ui_state.add_ui_update('prediction_result', 'set_content', '🔄 正在预测序列，请稍候...')
             
-            # 准备预测参数
+            # 准备预测参数，使用传入的参数而不是读取UI组件
             args = DottableDict({
-                'representation': self.ui_components['pred_representation'].value,
-                'seed': int(self.ui_components['pred_seed'].value),
-                'threshold': self.ui_components['threshold'].value if self.ui_components['threshold'].value else None,
+                'representation': prediction_params['representation'],
+                'seed': prediction_params['seed'],
+                'threshold': prediction_params['threshold'],
                 'model': self.ui_state.uploaded_files['model'],
                 'seq_file': self.ui_state.uploaded_files['sequence'],
                 'drop_feature': self.ui_state.uploaded_files.get('pred_drop_feature')
             })
             
             # 执行预测
-            await asyncio.get_event_loop().run_in_executor(None, predict, args)
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, predict, args)
+            except Exception as predict_error:
+                # 如果predict函数内部出错，捕获并处理
+                logger.error(f"预测函数执行失败: {predict_error}")
+                raise predict_error
             
             # 处理预测结果
             await self._process_prediction_result()
             
         except Exception as e:
             logger.error(f"预测失败: {e}")
-            self.ui_components['prediction_result'].content = f'❌ 预测失败: {str(e)}'
+            self.ui_state.add_ui_update('prediction_result', 'set_content', f'❌ 预测失败: {str(e)}')
             self.ui_state.add_message(f'预测失败: {str(e)}', 'negative')
         
         finally:
             self.ui_state.reset_prediction_state()
-            self.ui_components['prediction_spinner'].set_visibility(False)
+            self.ui_state.add_ui_update('prediction_spinner', 'set_visibility', False)
     
     async def _process_prediction_result(self):
         """处理预测结果"""
@@ -1086,17 +1237,17 @@ class AMPmlAppOptimized:
 - 📄 result/AMPpred.tsv (预测结果)
 '''
                 
-                self.ui_components['prediction_result'].content = result_text
-                self.ui_components['download_button'].set_visibility(True)
+                self.ui_state.add_ui_update('prediction_result', 'set_content', result_text)
+                self.ui_state.add_ui_update('download_button', 'set_visibility', True)
                 
                 self.ui_state.add_message(f'✅ 预测完成！处理了 {total_count} 个序列', 'positive')
             else:
-                self.ui_components['prediction_result'].content = '❌ 预测结果文件未生成'
+                self.ui_state.add_ui_update('prediction_result', 'set_content', '❌ 预测结果文件未生成')
                 self.ui_state.add_message('预测结果文件未生成', 'negative')
                 
         except Exception as e:
             logger.error(f"预测结果处理失败: {e}")
-            self.ui_components['prediction_result'].content = f'❌ 结果处理失败: {str(e)}'
+            self.ui_state.add_ui_update('prediction_result', 'set_content', f'❌ 结果处理失败: {str(e)}')
     
     def _download_results(self):
         """下载预测结果"""
